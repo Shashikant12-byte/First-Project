@@ -26,6 +26,8 @@ export default {
         "glass-border": "hsl(var(--glass-border))",
         success: "hsl(var(--success))",
         warning: "hsl(var(--warning))",
+        "ey-yellow": "hsl(54, 100%, 50%)",
+        "ey-cyan": "hsl(185, 70%, 50%)",
         primary: {
           DEFAULT: "hsl(var(--primary))",
           foreground: "hsl(var(--primary-foreground))",
