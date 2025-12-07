@@ -1,8 +1,22 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Sparkles, X, Minimize2, Maximize2 } from "lucide-react";
+import { Send, Sparkles, X, Minimize2, Maximize2, MapPin, ShoppingBag, CreditCard, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentThinking, AgentType } from "@/components/agents/AgentStatus";
+import { sendMessageToAgent } from "@/services/api";
+
+// --- Types ---
+interface ProductData {
+  name: string;
+  price: number;
+  imageUrl: string;
+  stock: {
+    inStore: {
+      available: boolean;
+      location: string;
+    };
+  };
+}
 
 interface Message {
   id: string;
@@ -11,19 +25,23 @@ interface Message {
   agent?: AgentType;
   timestamp: Date;
   suggestions?: string[];
+  dataType?: "inventory_response" | "payment_response" | "recommendation_response" | "text";
+  data?: any; 
+  product?: ProductData;
+  status?: "success" | "failed";
 }
 
 interface ChatInterfaceProps {
   isOpen: boolean;
   onClose: () => void;
+  // This prop connects the Chat to the Main Grid
   onSearch: (query: string) => void;
-  onProductRecommend?: (productId: string) => void;
 }
 
 const quickActions = [
   "Show me summer outfits",
-  "Find running shoes under $200",
-  "What's trending this week?",
+  "Check stock for denim jacket",
+  "I want to checkout",
   "Help me with returns",
 ];
 
@@ -48,102 +66,124 @@ export function ChatInterface({ isOpen, onClose, onSearch }: ChatInterfaceProps)
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const simulateAgentResponse = async (userMessage: string) => {
+  // --- THE UPDATED SEND HANDLER ---
+  const handleSend = async (overrideInput?: string) => {
+    const textToSend = overrideInput || input;
+    if (!textToSend.trim()) return;
+
+    // 1. Add User Message
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      type: "user",
+      content: textToSend,
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, userMessage]);
+    setInput("");
     setIsThinking(true);
-    
-    // Determine which agent should respond
-    const lowerMessage = userMessage.toLowerCase();
-    let agent: AgentType = "orchestrator";
-    let thinkingMessage = "Analyzing your request...";
-    
-    if (lowerMessage.includes("summer") || lowerMessage.includes("outfit") || lowerMessage.includes("recommend") || lowerMessage.includes("find") || lowerMessage.includes("show")) {
-      agent = "recommendation";
-      thinkingMessage = "Analyzing your style preferences...";
-    } else if (lowerMessage.includes("stock") || lowerMessage.includes("store") || lowerMessage.includes("pickup") || lowerMessage.includes("available")) {
-      agent = "inventory";
-      thinkingMessage = "Checking local inventory...";
-    } else if (lowerMessage.includes("pay") || lowerMessage.includes("checkout") || lowerMessage.includes("purchase")) {
-      agent = "payment";
-      thinkingMessage = "Preparing secure checkout...";
-    } else if (lowerMessage.includes("return") || lowerMessage.includes("exchange") || lowerMessage.includes("refund") || lowerMessage.includes("help")) {
-      agent = "support";
-      thinkingMessage = "Connecting you with support...";
-    }
 
-    setActiveAgent(agent);
+    // 2. UI Optimistic Updates (Guessing the Agent)
+    const lowerMsg = textToSend.toLowerCase();
+    if (lowerMsg.includes("stock") || lowerMsg.includes("have")) setActiveAgent("inventory");
+    else if (lowerMsg.includes("buy") || lowerMsg.includes("pay")) setActiveAgent("payment");
+    else setActiveAgent("recommendation");
 
-    // Simulate thinking delay
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    try {
+      // 3. CALL THE BACKEND (Gemini Orchestrator)
+      const response = await sendMessageToAgent(textToSend);
 
-    // Generate response based on agent
-    let response = "";
-    let suggestions: string[] = [];
+      // 4. HANDLE "ACTION AT A DISTANCE"
+      // If Gemini decided this was a SEARCH intent, we trigger the grid update immediately
+      if (response.type === 'recommendation_response' && response.searchQuery) {
+        console.log("🤖 Orchestrator Triggering Search:", response.searchQuery);
+        onSearch(response.searchQuery);
+      }
 
-    switch (agent) {
-      case "recommendation":
-        response = "I found some great options for you! I've updated the product grid with items matching your style. The 'Flux Training Set' has a 96% style match based on your preferences.";
-        suggestions = ["Show more like this", "Filter by price", "Check availability"];
-        onSearch(userMessage);
-        break;
-      case "inventory":
-        response = "I've checked inventory across 3 nearby stores. The Downtown Flagship has 12 units in stock with same-day pickup available. Would you like me to reserve one?";
-        suggestions = ["Reserve item", "Show all stores", "Delivery options"];
-        break;
-      case "payment":
-        response = "I'm ready to process your order. All items are verified for secure checkout. Your total includes free shipping on orders over $150.";
-        suggestions = ["Proceed to checkout", "Apply coupon", "Split payment"];
-        break;
-      case "support":
-        response = "I'm here to help! Is there an issue with a recent order, or would you like to initiate a return? I can arrange a pickup for tomorrow if needed.";
-        suggestions = ["Start a return", "Track my order", "Talk to human"];
-        break;
-      default:
-        response = "I'm coordinating with our specialized agents to assist you. How can I help you today?";
-        suggestions = quickActions;
-    }
-
-    setMessages(prev => [
-      ...prev,
-      {
+      // 5. Format the Agent Message for UI
+      const agentMessage: Message = {
         id: Date.now().toString(),
         type: "agent",
-        content: response,
-        agent,
+        content: response.message,
+        // Map backend types to frontend agent personas
+        agent: response.type === 'inventory_response' ? 'inventory' 
+             : response.type === 'payment_response' ? 'payment' 
+             : response.type === 'recommendation_response' ? 'recommendation'
+             : 'orchestrator',
         timestamp: new Date(),
-        suggestions,
-      },
-    ]);
+        dataType: response.type,
+        data: response.data,
+        product: response.product, // Inventory data
+        status: response.status,   // Payment status
+        suggestions: ["Show similar items", "Check other stores"]
+      };
 
-    setIsThinking(false);
-    setActiveAgent(null);
+      setMessages(prev => [...prev, agentMessage]);
+
+    } catch (error) {
+      console.error(error);
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        type: "agent",
+        content: "I'm having trouble connecting to the store server. Please try again.",
+        agent: "orchestrator",
+        timestamp: new Date()
+      }]);
+    } finally {
+      setIsThinking(false);
+      setActiveAgent(null);
+    }
   };
 
-  const handleSend = () => {
-    if (!input.trim()) return;
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      type: "user",
-      content: input,
-      timestamp: new Date(),
-    };
-
-    setMessages(prev => [...prev, userMessage]);
-    const messageText = input;
-    setInput("");
-    simulateAgentResponse(messageText);
+  // --- RENDER HELPERS (Unchanged visual logic) ---
+  const renderProductCard = (msg: Message) => {
+    if (!msg.product) return null;
+    const { name, price, imageUrl, stock } = msg.product;
+    
+    return (
+      <div className="mt-3 p-3 bg-secondary/50 rounded-xl border border-glass-border">
+        <div className="flex gap-3">
+          <img src={imageUrl} alt={name} className="w-16 h-16 object-cover rounded-lg bg-white" />
+          <div className="flex-1">
+            <h4 className="font-semibold text-sm">{name}</h4>
+            <p className="text-sm text-muted-foreground">₹{price}</p>
+            <div className="flex items-center gap-1 mt-1 text-xs">
+              {stock.inStore.available ? (
+                <span className="text-green-500 flex items-center gap-1">
+                  <MapPin size={12} /> Available at {stock.inStore.location}
+                </span>
+              ) : (
+                <span className="text-orange-500 flex items-center gap-1">
+                  <ShoppingBag size={12} /> Online Only
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+        <Button size="sm" className="w-full mt-3 h-8 text-xs">
+          {stock.inStore.available ? "Reserve for Pickup" : "Add to Cart"}
+        </Button>
+      </div>
+    );
   };
 
-  const handleSuggestionClick = (suggestion: string) => {
-    setInput(suggestion);
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      type: "user",
-      content: suggestion,
-      timestamp: new Date(),
-    };
-    setMessages(prev => [...prev, userMessage]);
-    simulateAgentResponse(suggestion);
+  const renderPaymentCard = (msg: Message) => {
+    const isSuccess = msg.status === 'success';
+    return (
+      <div className={`mt-3 p-3 rounded-xl border ${isSuccess ? 'bg-green-500/10 border-green-500/20' : 'bg-red-500/10 border-red-500/20'}`}>
+        <div className="flex items-center gap-2 mb-2">
+          {isSuccess ? <CreditCard className="text-green-500 h-4 w-4" /> : <AlertCircle className="text-red-500 h-4 w-4" />}
+          <span className={`font-semibold text-sm ${isSuccess ? 'text-green-500' : 'text-red-500'}`}>
+            {isSuccess ? "Payment Successful" : "Payment Failed"}
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground">{msg.content}</p>
+        {!isSuccess && (
+          <Button size="sm" variant="outline" className="w-full mt-2 h-7 text-xs border-red-500/30 hover:bg-red-500/10">
+            Retry Transaction
+          </Button>
+        )}
+      </div>
+    );
   };
 
   if (!isOpen) return null;
@@ -167,22 +207,13 @@ export function ChatInterface({ isOpen, onClose, onSearch }: ChatInterfaceProps)
             <span className="absolute -bottom-1 -right-1 w-3 h-3 bg-success rounded-full border-2 border-card" />
           </div>
           <div>
-            <h3 className="font-semibold text-sm">AI Orchestrator</h3>
-            <p className="text-xs text-muted-foreground">Multi-Agent System Active</p>
+            <h3 className="font-semibold text-sm">BlockBusters AI</h3>
+            <p className="text-xs text-muted-foreground">Orchestrator Online</p>
           </div>
         </div>
         <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => setIsMinimized(!isMinimized)}
-          >
-            {isMinimized ? (
-              <Maximize2 className="h-4 w-4" />
-            ) : (
-              <Minimize2 className="h-4 w-4" />
-            )}
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setIsMinimized(!isMinimized)}>
+            {isMinimized ? <Maximize2 className="h-4 w-4" /> : <Minimize2 className="h-4 w-4" />}
           </Button>
           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onClose}>
             <X className="h-4 w-4" />
@@ -192,7 +223,7 @@ export function ChatInterface({ isOpen, onClose, onSearch }: ChatInterfaceProps)
 
       {!isMinimized && (
         <>
-          {/* Messages */}
+          {/* Messages Area */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin">
             <AnimatePresence>
               {messages.map((message) => (
@@ -202,29 +233,35 @@ export function ChatInterface({ isOpen, onClose, onSearch }: ChatInterfaceProps)
                   animate={{ opacity: 1, y: 0 }}
                   className={`flex ${message.type === "user" ? "justify-end" : "justify-start"}`}
                 >
-                  <div
-                    className={`max-w-[85%] ${
-                      message.type === "user"
-                        ? "bg-primary text-primary-foreground rounded-2xl rounded-br-md px-4 py-3"
-                        : "space-y-3"
-                    }`}
-                  >
+                  <div className={`max-w-[85%] ${message.type === "user" ? "bg-primary text-primary-foreground rounded-2xl rounded-br-md px-4 py-3" : "space-y-1"}`}>
+                    
+                    {/* Agent Label */}
                     {message.type === "agent" && (
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="text-xs font-medium text-primary capitalize">
-                          {message.agent} Agent
+                        <span className="text-xs font-medium text-primary capitalize px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20">
+                          {message.agent || "Orchestrator"} Agent
                         </span>
                       </div>
                     )}
-                    <p className={`text-sm ${message.type === "agent" ? "text-foreground" : ""}`}>
-                      {message.content}
-                    </p>
+
+                    {/* Main Content */}
+                    <div className={message.type === "agent" ? "bg-secondary/30 p-3 rounded-2xl rounded-tl-none" : ""}>
+                      <p className={`text-sm ${message.type === "agent" ? "text-foreground" : ""}`}>
+                        {message.content}
+                      </p>
+
+                      {/* Dynamic Cards based on Backend Data */}
+                      {message.dataType === 'inventory_response' && renderProductCard(message)}
+                      {message.dataType === 'payment_response' && renderPaymentCard(message)}
+                    </div>
+
+                    {/* Suggestions Chips */}
                     {message.suggestions && (
-                      <div className="flex flex-wrap gap-2 mt-3">
+                      <div className="flex flex-wrap gap-2 mt-2 ml-1">
                         {message.suggestions.map((suggestion, i) => (
                           <button
                             key={i}
-                            onClick={() => handleSuggestionClick(suggestion)}
+                            onClick={() => handleSend(suggestion)}
                             className="text-xs px-3 py-1.5 rounded-full bg-secondary hover:bg-secondary/80 text-foreground transition-colors border border-glass-border"
                           >
                             {suggestion}
@@ -237,19 +274,16 @@ export function ChatInterface({ isOpen, onClose, onSearch }: ChatInterfaceProps)
               ))}
             </AnimatePresence>
 
-            {/* Thinking Indicator */}
+            {/* Thinking State */}
             <AnimatePresence>
               {isThinking && activeAgent && (
                 <AgentThinking
                   agent={activeAgent}
                   message={
-                    activeAgent === "recommendation"
-                      ? "Analyzing your style preferences..."
-                      : activeAgent === "inventory"
-                      ? "Scanning local store databases..."
-                      : activeAgent === "payment"
-                      ? "Verifying transaction security..."
-                      : "Processing your request..."
+                    activeAgent === "recommendation" ? "Analyzing style preferences..." :
+                    activeAgent === "inventory" ? "Checking warehouse & store stock..." :
+                    activeAgent === "payment" ? "Securely communicating with gateway..." :
+                    "Orchestrator is routing your request..."
                   }
                 />
               )}
@@ -258,7 +292,7 @@ export function ChatInterface({ isOpen, onClose, onSearch }: ChatInterfaceProps)
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Input */}
+          {/* Input Area */}
           <div className="p-4 border-t border-glass-border">
             <div className="flex items-center gap-2">
               <input
@@ -266,15 +300,10 @@ export function ChatInterface({ isOpen, onClose, onSearch }: ChatInterfaceProps)
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                placeholder="Ask me anything..."
+                placeholder="Type 'check stock' or 'buy now'..."
                 className="flex-1 h-10 px-4 rounded-xl bg-secondary/50 border border-glass-border text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
               />
-              <Button
-                variant="glow"
-                size="icon"
-                onClick={handleSend}
-                disabled={!input.trim() || isThinking}
-              >
+              <Button variant="glow" size="icon" onClick={() => handleSend()} disabled={!input.trim() || isThinking}>
                 <Send className="h-4 w-4" />
               </Button>
             </div>

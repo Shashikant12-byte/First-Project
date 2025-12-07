@@ -1,11 +1,13 @@
+// backend/routes/chatRoutes.js
 const express = require('express');
 const router = express.Router();
-const { processMessage } = require('../agents/orchestrator');
+// Import the NEW Gemini-powered orchestrator
+const { processMessage } = require('../agents/orchestrator'); 
 
 router.post('/', async (req, res) => {
-  const { message, userId } = req.body;
-  
+  const { message } = req.body;
   try {
+    // This now calls Gemini, not the hardcoded logic
     const response = await processMessage(message);
     res.json(response);
   } catch (error) {
