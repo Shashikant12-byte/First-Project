@@ -1,69 +1,138 @@
 // backend/server.js
+
 const express = require("express");
 const cors = require("cors");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 require("dotenv").config();
 
-const productRoutes = require('./routes/productRoutes'); 
+const productRoutes = require("./routes/productRoutes");
 
 const app = express();
 
+/* -------------------- Middleware -------------------- */
 app.use(cors());
 app.use(express.json());
 
-// Register Product Routes
-app.use('/api/products', productRoutes);
+/* -------------------- Product Routes -------------------- */
+app.use("/api/products", productRoutes);
 
-// Setup Gemini
+/* -------------------- Gemini Setup -------------------- */
+if (!process.env.GEMINI_API_KEY) {
+  console.error("❌ GEMINI_API_KEY is missing in .env");
+  process.exit(1);
+}
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-app.post('/api/shop/chat', async (req, res) => {
+/* -------------------- Chat Orchestrator -------------------- */
+app.post("/api/shop/chat", async (req, res) => {
   const { message } = req.body;
 
+  if (!message) {
+    return res.status(400).json({
+      type: "text",
+      message: "Message is required."
+    });
+  }
+
   const prompt = `
-    You are the Sales Agent Orchestrator for BlockBusters Retail.
-    User Input: "${message}"
-    
-    Determine the user's intent.
-    1. If they want to find/buy products (e.g., "buy shoes", "summer outfits"), return a JSON object:
-       { "type": "SEARCH", "query": "extracted keywords", "reply": "Sure! Here are some..." }
-    2. If they ask about stock/inventory (e.g., "is this available?"), return:
-       { "type": "INVENTORY", "query": "product name", "reply": "Let me check the stock..." }
-    3. If it's a general question, return:
-       { "type": "CHAT", "reply": "Your conversational response..." }
-       
-    ONLY return the JSON string, no markdown.
-  `;
+You are the Sales Agent Orchestrator for BlockBusters Retail.
+
+User input:
+"${message}"
+
+Classify the intent and respond ONLY with valid JSON.
+
+INTENTS:
+1. Product discovery / buying intent
+   → type: "SEARCH"
+   → query: short product keywords
+   → reply: friendly response
+
+2. Inventory / availability check
+   → type: "INVENTORY"
+   → query: product name
+   → reply: confirmation message
+
+3. General conversation
+   → type: "CHAT"
+   → reply: conversational answer
+
+Rules:
+- Output ONLY raw JSON
+- No markdown
+- No explanations
+- If unsure, use CHAT
+If you do not return valid JSON, the system will fail.
+`;
 
   try {
-    // We use 'gemini-1.5-flash' here. If it fails, try 'gemini-pro'
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    
-    let text = response.text();
-    
-    // Clean up markdown if Gemini adds it (e.g. ```json ... ```)
-    text = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    
-    const data = JSON.parse(text);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-    res.json({
-      id: Date.now().toString(),
-      role: 'assistant',
-      ...data, 
-      timestamp: new Date().toISOString()
-    });
+    const result = await model.generateContent(prompt);
+    const response = result.response;
+
+    let text = response.text();
+
+    // Cleanup accidental markdown
+    text = text.replace(/```json/g, "").replace(/```/g, "").trim();
+
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (err) {
+      console.error("❌ JSON Parse Failed:", text);
+      return res.json({
+        type: "text",
+        message: response.text()
+      });
+    }
+
+    /* -------------------- Frontend Contract Mapping -------------------- */
+    let frontendResponse = {
+      type: "text",
+      message: data.reply || "How can I help you today?"
+    };
+
+    if (data.type === "SEARCH") {
+      frontendResponse = {
+        type: "recommendation_response",
+        message: data.reply,
+        searchQuery: data.query
+      };
+    }
+
+    if (data.type === "INVENTORY") {
+      frontendResponse = {
+        type: "inventory_response",
+        message: data.reply,
+        product: {
+          name: data.query,
+          price: 2499,
+          imageUrl: "https://via.placeholder.com/150",
+          stock: {
+            inStore: {
+              available: true,
+              location: "MG Road"
+            }
+          }
+        }
+      };
+    }
+
+    res.json(frontendResponse);
 
   } catch (error) {
-    console.error('Gemini Error:', error);
-    res.status(500).json({ 
-      error: "AI Error", 
-      details: error.message 
+    console.error("🔥 Gemini Error:", error);
+    res.status(500).json({
+      type: "text",
+      message: "The AI service is temporarily unavailable. Please try again."
     });
   }
 });
 
+/* -------------------- Server Startup -------------------- */
 const PORT = 5000;
-app.listen(PORT, () => console.log(`🚀 BlockBusters AI running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 BlockBusters AI Backend running at http://localhost:${PORT}`);
+});

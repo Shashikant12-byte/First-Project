@@ -7,9 +7,21 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# Environment variables (CRITICAL)
+.env
+.env.*
+backend/.env
+backend/.env.*
+
+# Dependencies
+node_modules/
+backend/node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+
+# Local config
 *.local
 
 # Editor directories and files

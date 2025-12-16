@@ -1,15 +1,12 @@
 // src/services/api.js
 
-// 1. Define the Root URL (matches your backend port 5000)
-const SERVER_URL = "http://localhost:5000";
-
-// 2. Define Specific Endpoints
-const CHAT_ENDPOINT = `${SERVER_URL}/api/shop/chat`;
-const PRODUCT_ENDPOINT = `${SERVER_URL}/api/products`;
+// IMPORTANT:
+// Do NOT hardcode backend URL when using Vite proxy
+const CHAT_ENDPOINT = "/api/shop/chat";
+const PRODUCT_ENDPOINT = "/api/products";
 
 export const sendMessageToAgent = async (message, userId = "guest_123") => {
   try {
-    // FIX: Use the correct variable CHAT_ENDPOINT
     const response = await fetch(CHAT_ENDPOINT, {
       method: "POST",
       headers: {
@@ -22,23 +19,26 @@ export const sendMessageToAgent = async (message, userId = "guest_123") => {
       throw new Error(`Server Error: ${response.status}`);
     }
 
-    const data = await response.json();
-    return data;
+    return await response.json();
   } catch (error) {
     console.error("API Error:", error);
-    return { 
-      type: "text", 
-      message: "⚠️ System Offline: Cannot connect to BlockBusters Core." 
+    return {
+      type: "text",
+      message: "⚠️ System Offline: Cannot connect to BlockBusters Core."
     };
   }
 };
 
 export const searchProducts = async (query = "") => {
   try {
-    // FIX: Use PRODUCT_ENDPOINT so the URL is correct
-    const response = await fetch(`${PRODUCT_ENDPOINT}?search=${encodeURIComponent(query)}`);
-    
-    if (!response.ok) throw new Error("Failed to fetch products");
+    const response = await fetch(
+      `${PRODUCT_ENDPOINT}?search=${encodeURIComponent(query)}`
+    );
+
+    if (!response.ok) {
+      throw new Error("Failed to fetch products");
+    }
+
     return await response.json();
   } catch (error) {
     console.error("Search Error:", error);
