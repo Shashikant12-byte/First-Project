@@ -31,6 +31,7 @@ export function Footer() {
               {[
                 { to: "/", label: "Home" },
                 { to: "/shop", label: "Shop" },
+                { to: "/try-on", label: "Virtual Try-On" },
                 { to: "/how-it-works", label: "How It Works" },
                 { to: "/team", label: "Our Team" },
                 { to: "/orders", label: "My Orders" },
